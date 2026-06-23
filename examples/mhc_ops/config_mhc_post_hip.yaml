@@ -1,0 +1,18 @@
+task_type: hip2hip
+source_file_path:
+- src/mhc_post.cu
+harness_path: test_mhc_post_hip_harness.py
+compile_command:
+- python3 test_mhc_post_hip_harness.py --correctness
+correctness_command:
+- python3 test_mhc_post_hip_harness.py --correctness
+performance_command:
+- python3 test_mhc_post_hip_harness.py --full-benchmark
+target_kernel_functions:
+- mhc_post_baseline_kernel
+- mhc_post_cuda_launch
+prompt:
+  instructions: Optimize the CUDA/HIP mhc_post baseline kernel for Hygon K500SM_AI
+    DCU gfx928. The source is compiled by hipcc with -x hip. Preserve the assumed
+    formula new_residual_i = sum_j comb_mix[i,j] * residual_j + post_mix_i * x,
+    FP32 accumulation, and BF16 output correctness for all harness shapes.

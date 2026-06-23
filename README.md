@@ -18,9 +18,13 @@ examples/mhc_ops/
   kernel.py                         # PyTorch reference/prototype operators
   test_mhc_ops_harness.py           # PyTorch reference harness
   src/mhc_pre.cu                    # CUDA/HIP mhc_pre baseline
+  src/mhc_post.cu                   # CUDA/HIP mhc_post baseline
   mhc_pre_hip_wrapper.py            # hipcc build + ctypes wrapper
+  mhc_post_hip_wrapper.py           # hipcc build + ctypes wrapper
   test_mhc_pre_hip_harness.py       # GEAK harness for the CUDA/HIP kernel
+  test_mhc_post_hip_harness.py      # GEAK harness for the CUDA/HIP post kernel
   config_mhc_pre_hip.yaml           # case config metadata
+  config_mhc_post_hip.yaml          # post case config metadata
 
 baseline/
   src/mhc_pre.cu                    # original baseline used before GEAK
@@ -39,6 +43,7 @@ scripts/
   run-geak-mhc-pre.sh               # run GEAK on examples/mhc_ops
   test-baseline.sh                  # test baseline/
   test-optimized.sh                 # test optimized/
+  test-post-baseline.sh             # test examples/mhc_ops/src/mhc_post.cu
 ```
 
 `baseline/` and `optimized/` are self-contained copies for comparison. The
@@ -51,6 +56,19 @@ scripts/
 - `post_mix`: FP32, shape `[..., C, 1]`
 - `comb_mix`: FP32, shape `[..., C, C]`
 - `layer_input`: BF16, shape `[..., H]`
+
+`mhc_post` consumes the sub-layer output and updates the multi-channel residual
+stream. The assumed formula is:
+
+```text
+new_residual_i = sum_j comb_mix[i, j] * residual_j + post_mix_i * x
+```
+
+The post CUDA/HIP baseline is in:
+
+```bash
+examples/mhc_ops/src/mhc_post.cu
+```
 
 Precision requirements:
 
@@ -153,6 +171,23 @@ Benchmark:
 bash scripts/test-baseline.sh --full-benchmark
 ```
 
+## Test Post Baseline
+
+Correctness:
+
+```bash
+bash scripts/test-post-baseline.sh --correctness
+```
+
+Quick benchmark:
+
+```bash
+bash scripts/test-post-baseline.sh --full-benchmark --iterations 5
+```
+
+The post baseline harness compares the compiled CUDA/HIP kernel against an
+independent PyTorch reference and reports `GEAK_RESULT_LATENCY_MS`.
+
 ## GEAK Result
 
 Final verified result:
@@ -192,6 +227,23 @@ Run:
 
 ```bash
 bash scripts/run-geak-mhc-pre.sh
+```
+
+To optimize the post CUDA/HIP baseline from `examples/mhc_ops/src/mhc_post.cu`,
+use the same GEAK environment and point GEAK at the post harness:
+
+```bash
+geak --config "$GEAK_ROOT/config/local/hygon_k500sm_gfx928_codex_openai.yaml" \
+  --repo "$PWD/examples/mhc_ops" \
+  --kernel-url "$PWD/examples/mhc_ops/src/mhc_post.cu" \
+  --test-command "python3 $PWD/examples/mhc_ops/test_mhc_post_hip_harness.py --full-benchmark" \
+  --task "Optimize the CUDA/HIP mhc_post baseline kernel for Hygon K500SM_AI DCU gfx928. Preserve new_residual_i = sum_j comb_mix[i,j] * residual_j + post_mix_i * x." \
+  --gpu-ids 0 \
+  --num-parallel 1 \
+  --debug \
+  --yolo \
+  --exit-immediately \
+  -o "$GEAK_ROOT/optimization_logs/mhc_post_cu_hygon_opt"
 ```
 
 The script runs a command equivalent to:
