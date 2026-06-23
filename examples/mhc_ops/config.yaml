@@ -1,0 +1,17 @@
+task_type: python_geak
+source_file_path:
+- kernel.py
+harness_path: test_mhc_ops_harness.py
+compile_command:
+- python3 -m py_compile kernel.py test_mhc_ops_harness.py
+correctness_command:
+- python3 test_mhc_ops_harness.py --correctness --operator pre
+performance_command:
+- python3 test_mhc_ops_harness.py --full-benchmark --operator pre
+target_kernel_functions:
+- mhc_pre
+prompt:
+  instructions: Optimize the MHC pre operator for Hygon K500SM_AI DCU gfx928. The
+    operator consumes a BF16 multi-channel residual tensor, uses FP32 fn/hc_scale/hc_base,
+    computes the RMS-normalized projection in FP32, keeps post_mix and comb_mix in FP32,
+    and returns layer_input in BF16.

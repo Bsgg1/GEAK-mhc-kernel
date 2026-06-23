@@ -1,0 +1,17 @@
+task_type: python_geak
+source_file_path:
+- kernel.py
+harness_path: test_mhc_ops_harness.py
+compile_command:
+- python3 -m py_compile kernel.py test_mhc_ops_harness.py
+correctness_command:
+- python3 test_mhc_ops_harness.py --correctness --operator post
+performance_command:
+- python3 test_mhc_ops_harness.py --full-benchmark --operator post
+target_kernel_functions:
+- mhc_post
+prompt:
+  instructions: Optimize the MHC post operator for Hygon K500SM_AI DCU gfx928.
+    The assumed formula is new_residual_i = sum_j comb_mix[i,j] * residual_j
+    + post_mix_i * x. Inputs x and residual are BF16; post_mix and comb_mix are
+    FP32; intermediate accumulation is FP32; output new_residual is BF16.
