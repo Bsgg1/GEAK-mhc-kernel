@@ -1,0 +1,59 @@
+{
+  "status": "incremental_after_round_2",
+  "summary": "## Verified Final Selection\n- Best task: fixed-canonical\n- Best patch: fixed-canonical/patch_1\n- Verified FULL_BENCHMARK speedup: 6.7340x\n- Full benchmark geomean: 0.892604 ms -> 0.132551 ms",
+  "best_round": "round_2",
+  "best_task": "fixed-canonical",
+  "best_speedup": 6.734,
+  "best_speedup_verified": 6.734,
+  "best_patch": "/root/GEAK/optimization_logs/mhc_pre_cu_hygon_opt_agent/results/round_2/fixed-canonical/patch_1.patch",
+  "best_patch_size_bytes": 6241,
+  "best_patch_analysis": "Verified FULL_BENCHMARK: baseline=0.8926ms, candidate=0.1326ms. Speedup=6.7340x. Patch=6241B.",
+  "round_summaries": [
+    "## round_1\n## Previous Round Results\n\n\n### fixed-canonical\n- Patches produced: 2\n- **Best patch**: patch_0 (speedup=4.336235x, baseline=0.889028ms, candidate=0.205023ms)\n- Selection: Deterministic: baseline=0.8890ms (benchmark_baseline.txt), candidate=0.2050ms from patch_0. Speedup=4.3362x. Patch=6499B.\n- patch_0_test.txt: latency_ms=0.205023 **[BEST]**\n\n<details><summary>patch_0_test.txt (best patch full output)</summary>\n\n```\nhip correctness case 0: outer=(1,) C=4 H=128 ok\nhip correctness case 1: outer=(3,) C=4 H=256 ok\nhip correctness case 2: outer=(2, 3) C=4 H=512 ok\nhip correctness case 3: outer=(2,) C=2 H=128 ok\nhip correctness: ok\nPerf: hip 0.183143 ms | outer=(1,) C=4 H=4096 sinkhorn_repeat=2\nPerf: hip 0.182684 ms | outer=(16,) C=4 H=4096 sinkhorn_repeat=2\nPerf: hip 0.257583 ms | outer=(64,) C=4 H=4096 sinkhorn_repeat=2\nGEAK_RESULT_LATENCY_MS=0.205023\nGEAK_RESULT_UNIT=ms\nGEAK_RESULT_DIRECTION=lower_is_better\n```\n</details>\n- patch_1_test.txt: latency_ms=0.207171\n- Log (task_0.log): completed\n"
+  ],
+  "speedup_source": "FULL_BENCHMARK verified result",
+  "round_evaluation": {
+    "round": 2,
+    "best_patch": "/root/GEAK/optimization_logs/mhc_pre_cu_hygon_opt_agent/results/round_2/fixed-canonical/patch_1.patch",
+    "best_task": "fixed-canonical",
+    "benchmark_speedup": 7.409987,
+    "correctness": {
+      "returncode": 0,
+      "success": true
+    },
+    "full_benchmark": {
+      "stdout": "Perf: hip 0.110566 ms | outer=(1,) C=4 H=4096 sinkhorn_repeat=2\nPerf: hip 0.116822 ms | outer=(16,) C=4 H=4096 sinkhorn_repeat=2\nPerf: hip 0.135563 ms | outer=(64,) C=4 H=4096 sinkhorn_repeat=2\nPerf: hip 0.176297 ms | outer=(128,) C=4 H=4096 sinkhorn_repeat=2\nGEAK_RESULT_LATENCY_MS=0.132551\nGEAK_RESULT_UNIT=ms\nGEAK_RESULT_DIRECTION=lower_is_better\n",
+      "returncode": 0,
+      "success": true,
+      "baseline": "Perf: hip 0.894489 ms | outer=(1,) C=4 H=4096 sinkhorn_repeat=2\nPerf: hip 0.877592 ms | outer=(16,) C=4 H=4096 sinkhorn_repeat=2\nPerf: hip 0.902049 ms | outer=(64,) C=4 H=4096 sinkhorn_repeat=2\nPerf: hip 0.896473 ms | outer=(128,) C=4 H=4096 sinkhorn_repeat=2\nGEAK_RESULT_LATENCY_MS=0.892604\nGEAK_RESULT_UNIT=ms\nGEAK_RESULT_DIRECTION=lower_is_better",
+      "verified_speedup": 6.734,
+      "candidate_ms": 0.132551,
+      "baseline_ms": 0.892604,
+      "metric_direction": "lower_is_better"
+    },
+    "speedup_source": "FULL_BENCHMARK verified result"
+  },
+  "verified_speedup_raw": 6.734,
+  "verified_speedup": 6.734,
+  "verified_improvement": true,
+  "total_speedup": "6.7340x",
+  "verification_note": "Verified FULL_BENCHMARK speedup 6.7340x.",
+  "agent_summary": "## Verified Final Selection\n- Best task: fixed-canonical\n- Best patch: fixed-canonical/patch_0\n- Verified FULL_BENCHMARK speedup: 3.8152x\n- Full benchmark geomean: 0.892604 ms -> 0.233958 ms",
+  "optimized_codes": {
+    "status": "complete",
+    "directory": "/root/GEAK/optimization_logs/mhc_pre_cu_hygon_opt_agent/optimized_codes",
+    "files": [
+      "mhc_pre_hip_wrapper.py",
+      "src/mhc_pre.cu"
+    ],
+    "added": [],
+    "modified": [
+      "mhc_pre_hip_wrapper.py",
+      "src/mhc_pre.cu"
+    ],
+    "deleted": [],
+    "renamed": [],
+    "total_bytes": 16735,
+    "filtered_jit_cache": []
+  }
+}

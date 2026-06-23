@@ -1,0 +1,191 @@
+diff --git a/mhc_pre_hip_wrapper.py b/mhc_pre_hip_wrapper.py
+index 17df50a..1f8ce48 100644
+--- a/mhc_pre_hip_wrapper.py
++++ b/mhc_pre_hip_wrapper.py
+@@ -141,7 +141,6 @@ def mhc_pre_hip(
+     layer_input = torch.empty((*outer, h), device=residual.device, dtype=torch.bfloat16)
+ 
+     lib = _load_lib()
+-    torch.cuda.synchronize()
+     err = lib.mhc_pre_cuda_launch(
+         ctypes.c_void_p(residual.data_ptr()),
+         ctypes.c_void_p(fn.data_ptr()),
+@@ -160,7 +159,6 @@ def mhc_pre_hip(
+         ctypes.c_void_p(layer_input.data_ptr()),
+         ctypes.c_void_p(0),
+     )
+-    torch.cuda.synchronize()
+     if err != 0:
+         raise RuntimeError(f"mhc_pre_cuda_launch failed with HIP/CUDA error code {err}")
+     return post_mix, comb_mix, layer_input
+diff --git a/src/mhc_pre.cu b/src/mhc_pre.cu
+index 062ebb7..1c87946 100644
+--- a/src/mhc_pre.cu
++++ b/src/mhc_pre.cu
+@@ -209,6 +209,141 @@ __global__ void mhc_pre_baseline_kernel(
+ 
+ } // namespace
+ 
++__global__ void mhc_pre_c4_h4096_kernel(
++    const mhc_bfloat16* __restrict__ residual,
++    const float* __restrict__ fn,
++    const float* __restrict__ hc_scale,
++    const float* __restrict__ hc_base,
++    float rms_eps,
++    float hc_pre_eps,
++    float hc_sinkhorn_eps,
++    float hc_post_mult_value,
++    int t_tokens,
++    float* __restrict__ post_mix,
++    float* __restrict__ comb_mix,
++    mhc_bfloat16* __restrict__ layer_input) {
++  constexpr int c = 4;
++  constexpr int h = 4096;
++  constexpr int ch = c * h;
++  constexpr int c3 = c * 2 + c * c;
++  const int token = blockIdx.x;
++  const int tid = threadIdx.x;
++  if (token >= t_tokens) return;
++
++  extern __shared__ float smem[];
++  float* red = smem;                 // [25 * blockDim.x]
++  float* mixes = red + 25 * blockDim.x; // [24]
++  float* pre = mixes + c3;           // [4]
++  float* comb = pre + c;             // [16]
++
++  const int residual_base = token * ch;
++  float sqr = 0.0f;
++  float acc[c3];
++#pragma unroll
++  for (int m = 0; m < c3; ++m) acc[m] = 0.0f;
++
++  for (int idx = tid; idx < ch; idx += blockDim.x) {
++    const float v = mhc_bf16_to_float(residual[residual_base + idx]);
++    sqr += v * v;
++#pragma unroll
++    for (int m = 0; m < c3; ++m) {
++      acc[m] = fmaf(v, fn[m * ch + idx], acc[m]);
++    }
++  }
++
++  red[tid] = sqr;
++#pragma unroll
++  for (int m = 0; m < c3; ++m) {
++    red[(m + 1) * blockDim.x + tid] = acc[m];
++  }
++  __syncthreads();
++
++  for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
++    if (tid < stride) {
++#pragma unroll
++      for (int m = 0; m < 25; ++m) {
++        red[m * blockDim.x + tid] += red[m * blockDim.x + tid + stride];
++      }
++    }
++    __syncthreads();
++  }
++
++  const float rms_scale = rsqrtf(red[0] * (1.0f / static_cast<float>(ch)) + rms_eps);
++  if (tid < c3) {
++    mixes[tid] = red[(tid + 1) * blockDim.x] * rms_scale;
++  }
++  __syncthreads();
++
++  if (tid < c) {
++    const int i = tid;
++    pre[i] = sigmoidf_stable(mixes[i] * hc_scale[0] + hc_base[i]) + hc_pre_eps;
++    post_mix[token * c + i] = sigmoidf_stable(mixes[c + i] * hc_scale[1] + hc_base[c + i]) * hc_post_mult_value;
++  }
++  if (tid < c * c) {
++    const int idx = tid;
++    comb[idx] = mixes[2 * c + idx] * hc_scale[2] + hc_base[2 * c + idx];
++  }
++  __syncthreads();
++
++  if (tid < c) {
++    const int row = tid;
++    float v0 = comb[row * c + 0];
++    float v1 = comb[row * c + 1];
++    float v2 = comb[row * c + 2];
++    float v3 = comb[row * c + 3];
++    const float mx = fmaxf(fmaxf(v0, v1), fmaxf(v2, v3));
++    v0 = expf(v0 - mx); v1 = expf(v1 - mx); v2 = expf(v2 - mx); v3 = expf(v3 - mx);
++    const float inv = 1.0f / (v0 + v1 + v2 + v3);
++    comb[row * c + 0] = v0 * inv + hc_sinkhorn_eps;
++    comb[row * c + 1] = v1 * inv + hc_sinkhorn_eps;
++    comb[row * c + 2] = v2 * inv + hc_sinkhorn_eps;
++    comb[row * c + 3] = v3 * inv + hc_sinkhorn_eps;
++  }
++  __syncthreads();
++
++  if (tid < c) {
++    const int col = tid;
++    const float denom = comb[col] + comb[c + col] + comb[2 * c + col] + comb[3 * c + col] + hc_sinkhorn_eps;
++    comb[col] /= denom;
++    comb[c + col] /= denom;
++    comb[2 * c + col] /= denom;
++    comb[3 * c + col] /= denom;
++  }
++  __syncthreads();
++
++  if (tid < c) {
++    const int row = tid * c;
++    const float denom = comb[row] + comb[row + 1] + comb[row + 2] + comb[row + 3] + hc_sinkhorn_eps;
++    comb[row] /= denom;
++    comb[row + 1] /= denom;
++    comb[row + 2] /= denom;
++    comb[row + 3] /= denom;
++  }
++  __syncthreads();
++
++  if (tid < c) {
++    const int col = tid;
++    const float denom = comb[col] + comb[c + col] + comb[2 * c + col] + comb[3 * c + col] + hc_sinkhorn_eps;
++    comb[col] /= denom;
++    comb[c + col] /= denom;
++    comb[2 * c + col] /= denom;
++    comb[3 * c + col] /= denom;
++  }
++  __syncthreads();
++
++  if (tid < c * c) comb_mix[token * c * c + tid] = comb[tid];
++
++  for (int hidden = tid; hidden < h; hidden += blockDim.x) {
++    const float r0 = mhc_bf16_to_float(residual[residual_base + hidden]);
++    const float r1 = mhc_bf16_to_float(residual[residual_base + h + hidden]);
++    const float r2 = mhc_bf16_to_float(residual[residual_base + 2 * h + hidden]);
++    const float r3 = mhc_bf16_to_float(residual[residual_base + 3 * h + hidden]);
++    const float out = ((pre[0] * r0 + pre[1] * r1) + (pre[2] * r2 + pre[3] * r3));
++    layer_input[token * h + hidden] = mhc_float_to_bf16(out);
++  }
++}
++
++
+ extern "C" mhc_error_t mhc_pre_cuda_launch(
+     const mhc_bfloat16* residual,
+     const float* fn,
+@@ -227,6 +362,24 @@ extern "C" mhc_error_t mhc_pre_cuda_launch(
+     mhc_bfloat16* layer_input,
+     mhc_stream_t stream) {
+   const int threads = 256;
++  if (hc_mult == 4 && hidden_size == 4096 && sinkhorn_repeat == 2) {
++    const size_t shared_bytes = static_cast<size_t>(25 * threads + 24 + 4 + 16) * sizeof(float);
++    mhc_pre_c4_h4096_kernel<<<t_tokens, threads, shared_bytes, stream>>>(
++        residual,
++        fn,
++        hc_scale,
++        hc_base,
++        rms_eps,
++        hc_pre_eps,
++        hc_sinkhorn_eps,
++        hc_post_mult_value,
++        t_tokens,
++        post_mix,
++        comb_mix,
++        layer_input);
++    return MHC_GET_LAST_ERROR();
++  }
++
+   const int c = hc_mult;
+   const int c3 = c * 2 + c * c;
+   const size_t shared_bytes =

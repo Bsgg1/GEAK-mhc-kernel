@@ -1,0 +1,18 @@
+task_type: hip2hip
+source_file_path:
+- src/mhc_pre.cu
+harness_path: test_mhc_pre_hip_harness.py
+compile_command:
+- python3 test_mhc_pre_hip_harness.py --correctness
+correctness_command:
+- python3 test_mhc_pre_hip_harness.py --correctness
+performance_command:
+- python3 test_mhc_pre_hip_harness.py --full-benchmark
+target_kernel_functions:
+- mhc_pre_baseline_kernel
+- mhc_pre_cuda_launch
+prompt:
+  instructions: Optimize the CUDA/HIP mhc_pre baseline kernel for Hygon K500SM_AI
+    DCU gfx928. The source is compiled by hipcc with -x hip. Preserve the Python
+    reference semantics, FP32 accumulation, FP32 post_mix/comb_mix outputs, and
+    BF16 layer_input output.
