@@ -1,0 +1,55 @@
+{
+  "status": "incremental_after_round_2",
+  "summary": "## Verified Final Selection\n- Best task: fixed-canonical\n- Best patch: fixed-canonical/patch_1\n- Verified FULL_BENCHMARK speedup: 1.1345x\n- Full benchmark geomean: 0.101829 ms -> 0.089756 ms",
+  "best_round": "round_2",
+  "best_task": "fixed-canonical",
+  "best_speedup": 1.1345,
+  "best_speedup_verified": 1.1345,
+  "best_patch": "/root/GEAK/optimization_logs/mhc_post_cu_hygon_opt/results/round_2/fixed-canonical/patch_1.patch",
+  "best_patch_size_bytes": 5931,
+  "best_patch_analysis": "Verified FULL_BENCHMARK: baseline=0.1018ms, candidate=0.0898ms. Speedup=1.1345x. Patch=5931B.",
+  "round_summaries": [],
+  "speedup_source": "agent-reported benchmark (no FULL_BENCHMARK verified result available \u2014 the orchestrator will run FULL_BENCHMARK automatically after this round; do not use this speedup for final selection)",
+  "round_evaluation": {
+    "round": 2,
+    "best_patch": "/root/GEAK/optimization_logs/mhc_post_cu_hygon_opt/results/round_2/fixed-canonical/patch_1.patch",
+    "best_task": "fixed-canonical",
+    "benchmark_speedup": 1.07263,
+    "correctness": {
+      "returncode": 0,
+      "success": true
+    },
+    "full_benchmark": {
+      "stdout": "Perf: post hip 0.082902 ms | outer=(1,) C=4 H=4096\nPerf: post hip 0.085958 ms | outer=(16,) C=4 H=4096\nPerf: post hip 0.091643 ms | outer=(64,) C=4 H=4096\nPerf: post hip 0.099382 ms | outer=(128,) C=4 H=4096\nGEAK_RESULT_LATENCY_MS=0.089756\nGEAK_RESULT_UNIT=ms\nGEAK_RESULT_DIRECTION=lower_is_better\n",
+      "returncode": 0,
+      "success": true,
+      "baseline": "Perf: post hip 0.083295 ms | outer=(1,) C=4 H=4096\nPerf: post hip 0.090293 ms | outer=(16,) C=4 H=4096\nPerf: post hip 0.109349 ms | outer=(64,) C=4 H=4096\nPerf: post hip 0.130738 ms | outer=(128,) C=4 H=4096\nGEAK_RESULT_LATENCY_MS=0.101829\nGEAK_RESULT_UNIT=ms\nGEAK_RESULT_DIRECTION=lower_is_better",
+      "verified_speedup": 1.1345,
+      "candidate_ms": 0.089756,
+      "baseline_ms": 0.101829,
+      "metric_direction": "lower_is_better"
+    },
+    "speedup_source": "FULL_BENCHMARK verified result"
+  },
+  "verified_speedup_raw": 1.1345,
+  "verified_speedup": 1.1345,
+  "verified_improvement": true,
+  "total_speedup": "1.1345x",
+  "verification_note": "Verified FULL_BENCHMARK speedup 1.1345x.",
+  "agent_summary": "## Verified Final Selection\n- Best task: fixed-canonical\n- Best patch: fixed-canonical/patch_1\n- Verified FULL_BENCHMARK speedup: 1.1274x\n- Full benchmark geomean: 0.101829 ms -> 0.090324 ms",
+  "optimized_codes": {
+    "status": "complete",
+    "directory": "/root/GEAK/optimization_logs/mhc_post_cu_hygon_opt/optimized_codes",
+    "files": [
+      "src/mhc_post.cu"
+    ],
+    "added": [],
+    "modified": [
+      "src/mhc_post.cu"
+    ],
+    "deleted": [],
+    "renamed": [],
+    "total_bytes": 7669,
+    "filtered_jit_cache": []
+  }
+}

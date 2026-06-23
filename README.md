@@ -1,13 +1,13 @@
-# GEAK MHC Pre Kernel Case
+# GEAK MHC Kernel Case
 
 This repository contains a reproducible GEAK optimization case for the
-`mhc_pre` operator on Hygon K500SM_AI DCU (`gfx928`).
+`mhc_pre` and `mhc_post` operators on Hygon K500SM_AI DCU (`gfx928`).
 
 It includes:
 
 - The original CUDA/HIP baseline kernel.
 - The GEAK-compatible example directory.
-- The GEAK-optimized kernel.
+- The GEAK-optimized `mhc_pre` and `mhc_post` kernels.
 - Correctness and benchmark harnesses.
 - The final GEAK report and best patch.
 
@@ -35,15 +35,23 @@ optimized/
   src/mhc_pre.cu                    # GEAK best verified kernel
   mhc_pre_hip_wrapper.py            # GEAK best verified wrapper
 
+optimized_post/
+  src/mhc_post.cu                   # GEAK best verified post kernel
+  mhc_post_hip_wrapper.py           # wrapper that builds optimized_post/src/mhc_post.cu
+
 results/
-  final_report.json                 # GEAK final report
-  best_round2_patch_1.patch         # best patch selected by GEAK
+  final_report.json                 # mhc_pre GEAK final report
+  best_round2_patch_1.patch         # mhc_pre best patch selected by GEAK
+  mhc_post_final_report.json        # mhc_post GEAK final report
+  mhc_post_best_round2_patch_1.patch # mhc_post best patch selected by GEAK
 
 scripts/
   run-geak-mhc-pre.sh               # run GEAK on examples/mhc_ops
+  run-geak-mhc-post.sh              # run GEAK on the post kernel
   test-baseline.sh                  # test baseline/
   test-optimized.sh                 # test optimized/
   test-post-baseline.sh             # test examples/mhc_ops/src/mhc_post.cu
+  test-post-optimized.sh            # test optimized_post/
 ```
 
 `baseline/` and `optimized/` are self-contained copies for comparison. The
@@ -188,7 +196,35 @@ bash scripts/test-post-baseline.sh --full-benchmark --iterations 5
 The post baseline harness compares the compiled CUDA/HIP kernel against an
 independent PyTorch reference and reports `GEAK_RESULT_LATENCY_MS`.
 
-## GEAK Result
+## Test Post Optimized
+
+Correctness:
+
+```bash
+bash scripts/test-post-optimized.sh --correctness
+```
+
+Quick benchmark:
+
+```bash
+bash scripts/test-post-optimized.sh --full-benchmark --iterations 5
+```
+
+The optimized post result from GEAK is:
+
+```text
+baseline:  0.101829 ms
+optimized: 0.089756 ms
+speedup:   1.1345x
+```
+
+The optimized code is in:
+
+```bash
+optimized_post/src/mhc_post.cu
+```
+
+## GEAK Pre Result
 
 Final verified result:
 
@@ -212,6 +248,30 @@ Best patch:
 results/best_round2_patch_1.patch
 ```
 
+## GEAK Post Result
+
+Final verified result:
+
+```text
+baseline:  0.101829 ms
+optimized: 0.089756 ms
+speedup:   1.1345x
+```
+
+Both correctness and full benchmark passed.
+
+Detailed report:
+
+```bash
+results/mhc_post_final_report.json
+```
+
+Best patch:
+
+```bash
+results/mhc_post_best_round2_patch_1.patch
+```
+
 ## Run GEAK Again
 
 This repository does not vendor the full GEAK framework. Install or clone GEAK
@@ -229,24 +289,13 @@ Run:
 bash scripts/run-geak-mhc-pre.sh
 ```
 
-To optimize the post CUDA/HIP baseline from `examples/mhc_ops/src/mhc_post.cu`,
-use the same GEAK environment and point GEAK at the post harness:
+To optimize the post CUDA/HIP baseline from `examples/mhc_ops/src/mhc_post.cu`:
 
 ```bash
-geak --config "$GEAK_ROOT/config/local/hygon_k500sm_gfx928_codex_openai.yaml" \
-  --repo "$PWD/examples/mhc_ops" \
-  --kernel-url "$PWD/examples/mhc_ops/src/mhc_post.cu" \
-  --test-command "python3 $PWD/examples/mhc_ops/test_mhc_post_hip_harness.py --full-benchmark" \
-  --task "Optimize the CUDA/HIP mhc_post baseline kernel for Hygon K500SM_AI DCU gfx928. Preserve new_residual_i = sum_j comb_mix[i,j] * residual_j + post_mix_i * x." \
-  --gpu-ids 0 \
-  --num-parallel 1 \
-  --debug \
-  --yolo \
-  --exit-immediately \
-  -o "$GEAK_ROOT/optimization_logs/mhc_post_cu_hygon_opt"
+bash scripts/run-geak-mhc-post.sh
 ```
 
-The script runs a command equivalent to:
+The pre script runs a command equivalent to:
 
 ```bash
 geak --config "$GEAK_ROOT/config/local/hygon_k500sm_gfx928_codex_openai.yaml" \

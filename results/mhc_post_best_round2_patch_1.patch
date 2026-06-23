@@ -1,0 +1,168 @@
+diff --git a/src/mhc_post.cu b/src/mhc_post.cu
+index 9b4522b..082c2c9 100644
+--- a/src/mhc_post.cu
++++ b/src/mhc_post.cu
+@@ -78,6 +78,122 @@ __global__ void mhc_post_baseline_kernel(
+   new_residual[linear] = mhc_float_to_bf16(acc);
+ }
+ 
++
++__global__ void mhc_post_c4_h4096_kernel(
++    const mhc_bfloat16* __restrict__ x,
++    const mhc_bfloat16* __restrict__ residual,
++    const float* __restrict__ post_mix,
++    const float* __restrict__ comb_mix,
++    int total,
++    mhc_bfloat16* __restrict__ new_residual) {
++  const int linear = blockIdx.x * blockDim.x + threadIdx.x;
++  if (linear >= total) {
++    return;
++  }
++
++  const int hidden = linear & 4095;
++  const int token = linear >> 12;
++  const int base = (token << 14) + hidden;
++  const int mix_base = token << 2;
++  const int comb_base = token << 4;
++
++  const float xval = mhc_bf16_to_float(x[linear]);
++  const float r0 = mhc_bf16_to_float(residual[base]);
++  const float r1 = mhc_bf16_to_float(residual[base + 4096]);
++  const float r2 = mhc_bf16_to_float(residual[base + 8192]);
++  const float r3 = mhc_bf16_to_float(residual[base + 12288]);
++
++  const float p0 = post_mix[mix_base];
++  const float p1 = post_mix[mix_base + 1];
++  const float p2 = post_mix[mix_base + 2];
++  const float p3 = post_mix[mix_base + 3];
++
++  float a0 = p0 * xval;
++  a0 = fmaf(comb_mix[comb_base], r0, a0);
++  a0 = fmaf(comb_mix[comb_base + 1], r1, a0);
++  a0 = fmaf(comb_mix[comb_base + 2], r2, a0);
++  a0 = fmaf(comb_mix[comb_base + 3], r3, a0);
++
++  float a1 = p1 * xval;
++  a1 = fmaf(comb_mix[comb_base + 4], r0, a1);
++  a1 = fmaf(comb_mix[comb_base + 5], r1, a1);
++  a1 = fmaf(comb_mix[comb_base + 6], r2, a1);
++  a1 = fmaf(comb_mix[comb_base + 7], r3, a1);
++
++  float a2 = p2 * xval;
++  a2 = fmaf(comb_mix[comb_base + 8], r0, a2);
++  a2 = fmaf(comb_mix[comb_base + 9], r1, a2);
++  a2 = fmaf(comb_mix[comb_base + 10], r2, a2);
++  a2 = fmaf(comb_mix[comb_base + 11], r3, a2);
++
++  float a3 = p3 * xval;
++  a3 = fmaf(comb_mix[comb_base + 12], r0, a3);
++  a3 = fmaf(comb_mix[comb_base + 13], r1, a3);
++  a3 = fmaf(comb_mix[comb_base + 14], r2, a3);
++  a3 = fmaf(comb_mix[comb_base + 15], r3, a3);
++
++  new_residual[base] = mhc_float_to_bf16(a0);
++  new_residual[base + 4096] = mhc_float_to_bf16(a1);
++  new_residual[base + 8192] = mhc_float_to_bf16(a2);
++  new_residual[base + 12288] = mhc_float_to_bf16(a3);
++}
++
++__global__ void mhc_post_c4_generic_kernel(
++    const mhc_bfloat16* __restrict__ x,
++    const mhc_bfloat16* __restrict__ residual,
++    const float* __restrict__ post_mix,
++    const float* __restrict__ comb_mix,
++    int t_tokens,
++    int hidden_size,
++    mhc_bfloat16* __restrict__ new_residual) {
++  const int linear = blockIdx.x * blockDim.x + threadIdx.x;
++  const int total = t_tokens * hidden_size;
++  if (linear >= total) {
++    return;
++  }
++
++  const int hidden = linear % hidden_size;
++  const int token = linear / hidden_size;
++  const int base = token * 4 * hidden_size + hidden;
++  const int mix_base = token * 4;
++  const int comb_base = token * 16;
++
++  const float xval = mhc_bf16_to_float(x[token * hidden_size + hidden]);
++  const float r0 = mhc_bf16_to_float(residual[base]);
++  const float r1 = mhc_bf16_to_float(residual[base + hidden_size]);
++  const float r2 = mhc_bf16_to_float(residual[base + 2 * hidden_size]);
++  const float r3 = mhc_bf16_to_float(residual[base + 3 * hidden_size]);
++
++  float a0 = post_mix[mix_base] * xval;
++  a0 = fmaf(comb_mix[comb_base], r0, a0);
++  a0 = fmaf(comb_mix[comb_base + 1], r1, a0);
++  a0 = fmaf(comb_mix[comb_base + 2], r2, a0);
++  a0 = fmaf(comb_mix[comb_base + 3], r3, a0);
++
++  float a1 = post_mix[mix_base + 1] * xval;
++  a1 = fmaf(comb_mix[comb_base + 4], r0, a1);
++  a1 = fmaf(comb_mix[comb_base + 5], r1, a1);
++  a1 = fmaf(comb_mix[comb_base + 6], r2, a1);
++  a1 = fmaf(comb_mix[comb_base + 7], r3, a1);
++
++  float a2 = post_mix[mix_base + 2] * xval;
++  a2 = fmaf(comb_mix[comb_base + 8], r0, a2);
++  a2 = fmaf(comb_mix[comb_base + 9], r1, a2);
++  a2 = fmaf(comb_mix[comb_base + 10], r2, a2);
++  a2 = fmaf(comb_mix[comb_base + 11], r3, a2);
++
++  float a3 = post_mix[mix_base + 3] * xval;
++  a3 = fmaf(comb_mix[comb_base + 12], r0, a3);
++  a3 = fmaf(comb_mix[comb_base + 13], r1, a3);
++  a3 = fmaf(comb_mix[comb_base + 14], r2, a3);
++  a3 = fmaf(comb_mix[comb_base + 15], r3, a3);
++
++  new_residual[base] = mhc_float_to_bf16(a0);
++  new_residual[base + hidden_size] = mhc_float_to_bf16(a1);
++  new_residual[base + 2 * hidden_size] = mhc_float_to_bf16(a2);
++  new_residual[base + 3 * hidden_size] = mhc_float_to_bf16(a3);
++}
++
+ } // namespace
+ 
+ extern "C" mhc_error_t mhc_post_cuda_launch(
+@@ -91,17 +207,28 @@ extern "C" mhc_error_t mhc_post_cuda_launch(
+     mhc_bfloat16* new_residual,
+     mhc_stream_t stream) {
+   const int threads = 256;
+-  const int total = t_tokens * hc_mult * hidden_size;
+-  const int blocks = (total + threads - 1) / threads;
+-
+-  mhc_post_baseline_kernel<<<blocks, threads, 0, stream>>>(
+-      x,
+-      residual,
+-      post_mix,
+-      comb_mix,
+-      t_tokens,
+-      hc_mult,
+-      hidden_size,
+-      new_residual);
++  if (hc_mult == 4) {
++    const int total = t_tokens * hidden_size;
++    const int blocks = (total + threads - 1) / threads;
++    if (hidden_size == 4096) {
++      mhc_post_c4_h4096_kernel<<<blocks, threads, 0, stream>>>(
++          x, residual, post_mix, comb_mix, total, new_residual);
++    } else {
++      mhc_post_c4_generic_kernel<<<blocks, threads, 0, stream>>>(
++          x, residual, post_mix, comb_mix, t_tokens, hidden_size, new_residual);
++    }
++  } else {
++    const int total = t_tokens * hc_mult * hidden_size;
++    const int blocks = (total + threads - 1) / threads;
++    mhc_post_baseline_kernel<<<blocks, threads, 0, stream>>>(
++        x,
++        residual,
++        post_mix,
++        comb_mix,
++        t_tokens,
++        hc_mult,
++        hidden_size,
++        new_residual);
++  }
+   return MHC_GET_LAST_ERROR();
+ }
