@@ -175,6 +175,287 @@ The correctness strategy is:
 This workflow lets GEAK focus on the part it is good at: iterating over kernel
 patches, testing candidates, and selecting the fastest verified implementation.
 
+## 中文使用说明：如何使用 GEAK Agent 调优 Kernel
+
+这一节说明如何真正使用 GEAK Agent 做一次 kernel 调优。核心思想是：
+
+```text
+人负责定义问题边界：算子语义、输入输出、精度要求、正确性标准、benchmark 指标。
+Agent 负责尝试优化实现：修改 kernel、运行 harness、比较指标、输出最优 patch。
+```
+
+也就是说，GEAK Agent 不是直接“凭空生成一个正确 kernel”，而是在已有 baseline
+和 harness 的基础上进行自动调优。
+
+### 1. 准备 GEAK 环境
+
+先准备一个 GEAK checkout，并设置环境变量：
+
+```bash
+export GEAK_ROOT=/root/GEAK
+export GEAK_CONFIG="$GEAK_ROOT/config/local/hygon_k500sm_gfx928_codex_openai.yaml"
+export GEAK_USE_CODEX_OPENAI_KEY=1
+```
+
+如果 GEAK checkout 里有 Hygon DCU 环境脚本，可以加载：
+
+```bash
+source "$GEAK_ROOT/scripts/geak-hygon-env.sh"
+```
+
+这一步主要完成：
+
+```text
+1. 设置 Hygon K500SM_AI DCU / gfx928 相关环境
+2. 设置 hipcc、Python、GEAK 路径
+3. 设置 LLM API key 环境变量
+4. 指定 GEAK 使用的模型配置
+```
+
+真实 API key 不应该写进仓库，建议通过环境变量传给 GEAK。
+
+### 2. 选择要调优的 kernel
+
+本仓库里有三个可作为 GEAK target 的 HIP/CUDA baseline：
+
+```text
+examples/mhc_ops/src/mhc_pre.cu
+examples/mhc_ops/src/mhc_post.cu
+examples/mhc_ops/src/mhc_head.cu
+```
+
+每个 target 都有对应 harness：
+
+```text
+examples/mhc_ops/test_mhc_pre_hip_harness.py
+examples/mhc_ops/test_mhc_post_hip_harness.py
+examples/mhc_ops/test_mhc_head_hip_harness.py
+```
+
+GEAK 调优前，需要先确认 baseline 本身是正确的。例如先测试 `hc_head`：
+
+```bash
+bash scripts/test-head-baseline.sh --correctness
+bash scripts/test-head-baseline.sh --full-benchmark --iterations 5
+```
+
+如果 correctness 不通过，不要启动 GEAK。需要先修 baseline 或 reference。
+
+### 3. Harness 必须提供什么
+
+GEAK 依赖 harness 判断 patch 是否有效。一个合格 harness 至少要支持：
+
+```text
+--correctness       验证输出是否正确
+--benchmark         快速性能测试
+--full-benchmark    完整性能测试，GEAK 主要使用这个结果
+--profile           可选，用于 profile
+```
+
+并且 benchmark 输出里必须包含：
+
+```text
+GEAK_RESULT_LATENCY_MS=0.108738
+GEAK_RESULT_UNIT=ms
+GEAK_RESULT_DIRECTION=lower_is_better
+```
+
+`GEAK_RESULT_LATENCY_MS` 是 GEAK 用来比较不同 patch 的指标。这里是 latency，所以
+`lower_is_better`。
+
+### 4. 启动 Agent 调优
+
+最简单的方式是直接运行脚本：
+
+```bash
+bash scripts/run-geak-mhc-pre.sh
+bash scripts/run-geak-mhc-post.sh
+bash scripts/run-geak-mhc-head.sh
+```
+
+以 `hc_head` 为例，脚本内部等价于：
+
+```bash
+geak --config "$GEAK_CONFIG" \
+  --repo "$PWD/examples/mhc_ops" \
+  --kernel-url "$PWD/examples/mhc_ops/src/mhc_head.cu" \
+  --test-command "python3 $PWD/examples/mhc_ops/test_mhc_head_hip_harness.py --full-benchmark" \
+  --task "Optimize the CUDA/HIP hc_head baseline kernel for Hygon K500SM_AI DCU gfx928. The source is compiled by hipcc with -x hip. Metric is GEAK_RESULT_LATENCY_MS, lower is better. Preserve the formula hidden = sum_c head_mix[c] * residual[c], FP32 accumulation, and BF16 output correctness for all harness shapes." \
+  --gpu-ids 0 \
+  --num-parallel 1 \
+  --debug \
+  --yolo \
+  --exit-immediately \
+  -o "$GEAK_ROOT/optimization_logs/mhc_head_cu_hygon_opt_from_repo"
+```
+
+几个关键参数的作用：
+
+```text
+--config        GEAK 使用的模型和运行配置
+--repo          被调优项目的根目录
+--kernel-url    Agent 可以修改的 kernel 文件
+--test-command  GEAK 用来验证 correctness 和 benchmark 的命令
+--task          给 Agent 的自然语言任务说明
+--gpu-ids       使用哪张 GPU
+--num-parallel  同时跑几个子 Agent
+--debug         保留完整日志和中间产物
+--yolo          不进入交互确认，直接执行
+-o              本次调优输出目录
+```
+
+### 5. Prompt 应该怎么写
+
+调优效果很依赖 prompt。推荐包含以下信息：
+
+```text
+1. 目标硬件：Hygon K500SM_AI DCU gfx928
+2. 源文件：具体 kernel 文件路径
+3. 编译方式：hipcc -x hip
+4. 优化目标：GEAK_RESULT_LATENCY_MS，lower is better
+5. 数学公式：不能改变的算子语义
+6. 精度要求：哪些输入是 BF16，哪些权重/中间量是 FP32
+7. 正确性要求：必须通过所有 harness shapes
+```
+
+例如 `mhc_post` 的 prompt 可以写成：
+
+```text
+Optimize the CUDA/HIP mhc_post baseline kernel for Hygon K500SM_AI DCU gfx928.
+The source is compiled by hipcc with -x hip.
+Metric is GEAK_RESULT_LATENCY_MS, lower is better.
+Preserve the formula:
+new_residual_i = sum_j comb_mix[i,j] * residual_j + post_mix_i * x.
+Use FP32 accumulation and keep BF16 output correctness for all harness shapes.
+```
+
+不要只写：
+
+```text
+Optimize this kernel.
+```
+
+这种 prompt 约束太弱，Agent 可能不知道哪些计算不能改。
+
+### 6. 调优过程中怎么看日志
+
+GEAK 输出目录通常在：
+
+```text
+$GEAK_ROOT/optimization_logs/<case_name>/
+```
+
+可以看主日志：
+
+```bash
+tail -f "$GEAK_ROOT/optimization_logs/mhc_head_cu_hygon_opt_from_repo/geak_agent.log"
+```
+
+重点关注几类信息：
+
+```text
+preprocess 是否通过
+correctness 是否 PASS
+full_benchmark 是否 PASS
+Round N best 是哪个 patch
+Verified speedup 是否大于 1
+是否写出了 final_report.json
+```
+
+如果日志里出现：
+
+```text
+No valid candidates for evaluation
+```
+
+通常说明 Agent 生成的 patch 没有通过测试，或者没有成功提交候选结果。
+
+### 7. 跑完后怎么看结果
+
+一次成功的 GEAK run 通常会产生：
+
+```text
+final_report.json
+optimized_codes/
+results/round_*/fixed-canonical/patch_*.patch
+round_*_evaluation.json
+geak_agent.log
+```
+
+最重要的是：
+
+```text
+final_report.json          最终结果摘要
+optimized_codes/           GEAK 选出的最终优化代码
+patch_*.patch              对应的代码改动
+round_*_evaluation.json    correctness / full_benchmark 验证细节
+```
+
+判断是否真的调优成功，看这几个字段：
+
+```text
+correctness.success = true
+full_benchmark.success = true
+verified_improvement = true
+verified_speedup > 1.0
+```
+
+例如 `mhc_post` 的结果：
+
+```text
+baseline:  0.101829 ms
+optimized: 0.089756 ms
+speedup:   1.1345x
+```
+
+这表示 correctness 和 full benchmark 都通过，并且优化后 latency 更低。
+
+### 8. 如何继续调优
+
+如果一次 GEAK 结果不够好，可以从以下几个方向继续：
+
+```text
+1. 增加 --num-parallel，让多个 Agent 并行探索不同策略
+2. 增加 benchmark iterations，降低计时噪声
+3. 扩大 full-benchmark shapes，避免只优化单一 shape
+4. 把上一次 best patch 应用为新 baseline，再跑下一轮
+5. 在 prompt 中加入更明确的优化方向，例如向量化、减少全局内存访问、减少重复计算
+6. 检查 harness 容差，避免过松或过严
+7. 如果 profiler 支持目标架构，结合 profile 信息约束下一轮 prompt
+```
+
+常用环境变量：
+
+```bash
+export GEAK_BENCH_TIMEOUT=180
+export GEAK_PROFILE_TIMEOUT=15
+export GEAK_BASELINE_REPEATS=1
+export GEAK_LLM_REQUEST_TIMEOUT=180
+export MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT=3
+export GEAK_OFFLOAD_ARCH=gfx928
+```
+
+对于多 GPU 机器，可以尝试：
+
+```bash
+geak ... --gpu-ids 0,1,2,3 --num-parallel 4
+```
+
+这样 GEAK 会让多个子 Agent 在不同 GPU 上并行尝试优化。
+
+### 9. 常见坑
+
+```text
+1. API base_url 配错，LLM 返回 HTML 页面，而不是模型响应。
+2. OPENAI_API_KEY 旧值残留，导致实际用的不是当前 key。
+3. --repo 或 --kernel-url 写成占位路径，GEAK 找不到文件。
+4. shell 换行把 --full-benchmark 拆成了 --full- 和 benchmark。
+5. harness 没有输出 GEAK_RESULT_LATENCY_MS，GEAK 无法比较性能。
+6. baseline correctness 没过就启动 GEAK，后续 patch 结果没有意义。
+7. benchmark iterations 太少，latency 抖动导致误判。
+8. profile 工具不支持 gfx928，这不等价于 full_benchmark 失败。
+```
+
 ## Requirements
 
 Validated environment:
