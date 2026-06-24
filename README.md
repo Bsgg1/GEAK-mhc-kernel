@@ -1,15 +1,23 @@
 # GEAK MHC Kernel Case
 
 This repository contains a reproducible GEAK optimization case for the
-`mhc_pre` and `mhc_post` operators on Hygon K500SM_AI DCU (`gfx928`).
+`mhc_pre`, `mhc_post`, and `hc_head` operators on Hygon K500SM_AI DCU
+(`gfx928`).
 
 It includes:
 
 - The original CUDA/HIP baseline kernel.
 - The GEAK-compatible example directory.
 - The GEAK-optimized `mhc_pre` and `mhc_post` kernels.
+- A validated `hc_head` baseline that is ready for GEAK optimization.
 - Correctness and benchmark harnesses.
 - The final GEAK report and best patch.
+
+For a long-form Chinese write-up of the full Agent development process, see:
+
+```text
+docs/mhc_geak_agent_wechat_article.md
+```
 
 ## Repository Layout
 
@@ -19,12 +27,16 @@ examples/mhc_ops/
   test_mhc_ops_harness.py           # PyTorch reference harness
   src/mhc_pre.cu                    # CUDA/HIP mhc_pre baseline
   src/mhc_post.cu                   # CUDA/HIP mhc_post baseline
+  src/mhc_head.cu                   # CUDA/HIP hc_head baseline
   mhc_pre_hip_wrapper.py            # hipcc build + ctypes wrapper
   mhc_post_hip_wrapper.py           # hipcc build + ctypes wrapper
+  mhc_head_hip_wrapper.py           # hipcc build + ctypes wrapper
   test_mhc_pre_hip_harness.py       # GEAK harness for the CUDA/HIP kernel
   test_mhc_post_hip_harness.py      # GEAK harness for the CUDA/HIP post kernel
+  test_mhc_head_hip_harness.py      # GEAK harness for the CUDA/HIP head kernel
   config_mhc_pre_hip.yaml           # case config metadata
   config_mhc_post_hip.yaml          # post case config metadata
+  config_mhc_head_hip.yaml          # head case config metadata
 
 baseline/
   src/mhc_pre.cu                    # original baseline used before GEAK
@@ -48,10 +60,12 @@ results/
 scripts/
   run-geak-mhc-pre.sh               # run GEAK on examples/mhc_ops
   run-geak-mhc-post.sh              # run GEAK on the post kernel
+  run-geak-mhc-head.sh              # run GEAK on the head kernel
   test-baseline.sh                  # test baseline/
   test-optimized.sh                 # test optimized/
   test-post-baseline.sh             # test examples/mhc_ops/src/mhc_post.cu
   test-post-optimized.sh            # test optimized_post/
+  test-head-baseline.sh             # test examples/mhc_ops/src/mhc_head.cu
 ```
 
 `baseline/` and `optimized/` are self-contained copies for comparison. The
@@ -78,13 +92,88 @@ The post CUDA/HIP baseline is in:
 examples/mhc_ops/src/mhc_post.cu
 ```
 
+`hc_head` folds the final multi-channel residual stream back to a single
+hidden stream before the LM head. The baseline formula is:
+
+```text
+hidden = sum_c head_mix[c] * residual[c]
+```
+
+The head CUDA/HIP baseline is in:
+
+```bash
+examples/mhc_ops/src/mhc_head.cu
+```
+
 Precision requirements:
 
 - `residual`: BF16
 - `fn`, `hc_scale`, `hc_base`: FP32
 - GEMM/RMS/Sinkhorn intermediates: FP32
 - `post_mix`, `comb_mix`: FP32
-- `layer_input`: BF16
+- `head_mix`: FP32
+- `layer_input`, `new_residual`, `hidden`: BF16
+
+## Agent Development Process
+
+This case was developed with an Agent-assisted workflow instead of hand-tuning
+only. The important point is that GEAK does not optimize a custom HIP kernel in
+a vacuum: it needs a trusted baseline and a trusted harness first.
+
+The development loop was:
+
+```text
+1. Inspect the target hardware and confirm Hygon K500SM_AI DCU / gfx928.
+2. Prepare the GEAK local environment and OpenAI-compatible model config.
+3. Write a semantic-first PyTorch reference for each operator.
+4. Write a simple CUDA/HIP baseline kernel compiled by hipcc -x hip.
+5. Build a Python ctypes wrapper that compiles the kernel into a shared object.
+6. Build a harness with correctness, benchmark, full-benchmark, and profile modes.
+7. Make the harness print GEAK_RESULT_LATENCY_MS for GEAK scoring.
+8. Run correctness locally before starting GEAK.
+9. Start GEAK with a precise prompt that includes hardware, metric, formula, and dtype requirements.
+10. Inspect final_report.json, optimized_codes/, and the selected patch.
+```
+
+The prompt style that worked best was explicit and constraint-heavy. For
+example, `mhc_post` was described as:
+
+```text
+Optimize the CUDA/HIP mhc_post baseline kernel for Hygon K500SM_AI DCU gfx928.
+The source is compiled by hipcc with -x hip.
+Metric is GEAK_RESULT_LATENCY_MS, lower is better.
+Preserve the formula:
+new_residual_i = sum_j comb_mix[i,j] * residual_j + post_mix_i * x.
+Use FP32 accumulation and keep BF16 output correctness for all harness shapes.
+```
+
+Main issues encountered during development:
+
+- A wrong API endpoint can return an HTML page instead of an LLM response. The
+  model config must point at the OpenAI-compatible API path, and the key should
+  be supplied through the environment rather than committed.
+- Placeholder paths such as `/path/to/repo` cannot be used in GEAK commands.
+  `--repo`, `--kernel-url`, and `--test-command` must use real absolute paths.
+- Shell line breaks matter. Splitting `--full-benchmark` into `--full-` and
+  `benchmark` makes Bash treat `benchmark` as a separate command.
+- The harness is the contract. Agent-generated patches are only meaningful if
+  correctness and benchmark checks are deterministic and representative.
+- On this machine, profiler comparison for `gfx928` may be unsupported. That is
+  separate from correctness and full-benchmark verification.
+
+The correctness strategy is:
+
+```text
+1. Generate deterministic inputs for multiple shapes.
+2. Compute an independent PyTorch reference.
+3. Run the compiled HIP kernel.
+4. Check output dtype and shape.
+5. Compare numerically with tolerances appropriate for BF16 output.
+6. Benchmark with torch.cuda.Event and report GEAK_RESULT_LATENCY_MS.
+```
+
+This workflow lets GEAK focus on the part it is good at: iterating over kernel
+patches, testing candidates, and selecting the fastest verified implementation.
 
 ## Requirements
 
@@ -196,6 +285,23 @@ bash scripts/test-post-baseline.sh --full-benchmark --iterations 5
 The post baseline harness compares the compiled CUDA/HIP kernel against an
 independent PyTorch reference and reports `GEAK_RESULT_LATENCY_MS`.
 
+## Test Head Baseline
+
+Correctness:
+
+```bash
+bash scripts/test-head-baseline.sh --correctness
+```
+
+Quick benchmark:
+
+```bash
+bash scripts/test-head-baseline.sh --full-benchmark --iterations 5
+```
+
+The head baseline harness compares the compiled CUDA/HIP kernel against an
+independent PyTorch reference and reports `GEAK_RESULT_LATENCY_MS`.
+
 ## Test Post Optimized
 
 Correctness:
@@ -293,6 +399,12 @@ To optimize the post CUDA/HIP baseline from `examples/mhc_ops/src/mhc_post.cu`:
 
 ```bash
 bash scripts/run-geak-mhc-post.sh
+```
+
+To optimize the head CUDA/HIP baseline from `examples/mhc_ops/src/mhc_head.cu`:
+
+```bash
+bash scripts/run-geak-mhc-head.sh
 ```
 
 The pre script runs a command equivalent to:

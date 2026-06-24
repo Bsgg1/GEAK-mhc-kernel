@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from kernel import mhc_post, mhc_pre
+from kernel import hc_head, mhc_post, mhc_pre
 
 
 RMS_EPS = 1.0e-6
@@ -167,6 +167,38 @@ def _mhc_post_reference(
     return out.to(torch.bfloat16).view(*outer, c, h)
 
 
+def _make_head_inputs(case: Case, seed: int, device: torch.device):
+    c = case.hc_mult
+    h = case.hidden_size
+    gen = torch.Generator(device=device)
+    gen.manual_seed(seed)
+
+    residual = torch.randn(
+        (*case.outer, c, h),
+        device=device,
+        dtype=torch.bfloat16,
+        generator=gen,
+    )
+    logits = torch.randn((*case.outer, c), device=device, dtype=torch.float32, generator=gen)
+    head_mix = torch.softmax(logits, dim=-1)
+    return residual, head_mix
+
+
+def _hc_head_reference(residual: torch.Tensor, head_mix: torch.Tensor) -> torch.Tensor:
+    assert residual.dtype == torch.bfloat16
+    assert head_mix.dtype == torch.float32
+    c = residual.shape[-2]
+    h = residual.shape[-1]
+    outer = residual.shape[:-2]
+    r = residual.reshape(-1, c, h).to(torch.float32)
+    if head_mix.shape == (c,):
+        head = head_mix.view(1, c).expand(r.shape[0], c)
+    else:
+        head = head_mix.reshape(-1, c)
+    hidden = torch.sum(head.unsqueeze(-1) * r, dim=1)
+    return hidden.to(torch.bfloat16).view(*outer, h)
+
+
 def _geomean(values: list[float]) -> float:
     if not values:
         raise ValueError("no benchmark samples")
@@ -254,11 +286,53 @@ def _run_post_correctness() -> int:
     return 0
 
 
+def _run_head_correctness() -> int:
+    device = _device()
+    for idx, case in enumerate(CORRECTNESS_CASES):
+        inputs = _make_head_inputs(case, seed=9000 + idx, device=device)
+        expected = _hc_head_reference(*inputs)
+        actual = hc_head(*inputs)
+
+        if actual.dtype != torch.bfloat16:
+            raise AssertionError(f"hidden dtype must be bfloat16, got {actual.dtype}")
+        if actual.shape != expected.shape:
+            raise AssertionError(
+                f"shape mismatch: got {actual.shape}, expected {expected.shape}"
+            )
+
+        torch.testing.assert_close(
+            actual.float(),
+            expected.float(),
+            rtol=2.0e-2,
+            atol=2.0e-2,
+        )
+
+        flat_head_actual = hc_head(inputs[0], inputs[1].reshape(-1, case.hc_mult)[0])
+        flat_expected = _hc_head_reference(
+            inputs[0],
+            inputs[1].reshape(-1, case.hc_mult)[0],
+        )
+        torch.testing.assert_close(
+            flat_head_actual.float(),
+            flat_expected.float(),
+            rtol=2.0e-2,
+            atol=2.0e-2,
+        )
+        print(
+            "head correctness case "
+            f"{idx}: outer={case.outer} C={case.hc_mult} H={case.hidden_size} ok"
+        )
+    print("head correctness: ok")
+    return 0
+
+
 def _run_correctness(operator: str) -> int:
     if operator in ("pre", "all"):
         _run_pre_correctness()
     if operator in ("post", "all"):
         _run_post_correctness()
+    if operator in ("head", "all"):
+        _run_head_correctness()
     print(f"{operator} correctness: ok")
     return 0
 
@@ -300,9 +374,26 @@ def _time_post_case(case: Case, iterations: int, seed: int, device: torch.device
     return start.elapsed_time(end) / iterations
 
 
+def _time_head_case(case: Case, iterations: int, seed: int, device: torch.device) -> float:
+    inputs = _make_head_inputs(case, seed=seed, device=device)
+
+    for _ in range(WARMUP):
+        hc_head(*inputs)
+    torch.cuda.synchronize()
+
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    start.record()
+    for _ in range(iterations):
+        hc_head(*inputs)
+    end.record()
+    torch.cuda.synchronize()
+    return start.elapsed_time(end) / iterations
+
+
 def _run_benchmark(operator: str, cases: list[Case], iterations: int) -> int:
     if operator == "all":
-        raise ValueError("benchmark requires --operator pre or --operator post")
+        raise ValueError("benchmark requires --operator pre, --operator post, or --operator head")
     device = _device()
     latencies: list[float] = []
     for idx, case in enumerate(cases):
@@ -310,6 +401,8 @@ def _run_benchmark(operator: str, cases: list[Case], iterations: int) -> int:
             latency_ms = _time_pre_case(case, iterations, seed=2000 + idx, device=device)
         elif operator == "post":
             latency_ms = _time_post_case(case, iterations, seed=4000 + idx, device=device)
+        elif operator == "head":
+            latency_ms = _time_head_case(case, iterations, seed=10000 + idx, device=device)
         else:
             raise ValueError(f"unknown operator: {operator}")
         latencies.append(latency_ms)
@@ -329,7 +422,7 @@ def main() -> int:
     group.add_argument("--benchmark", action="store_true")
     group.add_argument("--full-benchmark", action="store_true")
     group.add_argument("--profile", action="store_true")
-    parser.add_argument("--operator", choices=("pre", "post", "all"), default="pre")
+    parser.add_argument("--operator", choices=("pre", "post", "head", "all"), default="pre")
     parser.add_argument("--iterations", type=int, default=DEFAULT_ITERATIONS)
     args = parser.parse_args()
 

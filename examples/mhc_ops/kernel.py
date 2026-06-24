@@ -134,3 +134,43 @@ def mhc_post(
     mixed_residual = torch.bmm(comb, r)
     new_residual = mixed_residual + post * y.unsqueeze(1)
     return new_residual.to(torch.bfloat16).view(*outer, c, h)
+
+
+def hc_head(residual: torch.Tensor, head_mix: torch.Tensor) -> torch.Tensor:
+    """Reference MHC head fold operator.
+
+    This operator folds the final multi-channel residual stream back to a
+    single hidden stream before the LM head:
+
+    ``hidden = sum_c head_mix_c * residual_c``
+
+    Args:
+        residual: BF16 tensor with shape ``[..., hc_mult, hidden_size]``.
+        head_mix: FP32 tensor with shape ``[..., hc_mult]``. A static
+            per-channel tensor with shape ``[hc_mult]`` is also accepted and
+            broadcast over the outer dimensions.
+
+    Returns:
+        BF16 tensor with shape ``[..., hidden_size]``.
+    """
+
+    assert residual.dtype == torch.bfloat16
+    assert head_mix.dtype == torch.float32
+
+    c = residual.shape[-2]
+    h = residual.shape[-1]
+    outer = residual.shape[:-2]
+    r = residual.reshape(-1, c, h).to(torch.float32)
+
+    if head_mix.shape == (c,):
+        head = head_mix.view(1, c).expand(r.shape[0], c)
+    elif head_mix.shape == (*outer, c):
+        head = head_mix.reshape(-1, c)
+    else:
+        raise ValueError(
+            f"head_mix must have shape {(c,)} or {(*outer, c)}, "
+            f"got {tuple(head_mix.shape)}"
+        )
+
+    hidden = torch.sum(head.unsqueeze(-1) * r, dim=1)
+    return hidden.to(torch.bfloat16).view(*outer, h)
