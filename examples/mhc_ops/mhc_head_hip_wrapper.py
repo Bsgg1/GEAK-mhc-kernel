@@ -116,7 +116,6 @@ def hc_head_hip(residual: torch.Tensor, head_mix: torch.Tensor) -> torch.Tensor:
     hidden = torch.empty((*outer, h), device=residual.device, dtype=torch.bfloat16)
 
     lib = _load_lib()
-    torch.cuda.synchronize()
     err = lib.hc_head_cuda_launch(
         ctypes.c_void_p(residual.data_ptr()),
         ctypes.c_void_p(head.data_ptr()),
@@ -126,7 +125,6 @@ def hc_head_hip(residual: torch.Tensor, head_mix: torch.Tensor) -> torch.Tensor:
         ctypes.c_void_p(hidden.data_ptr()),
         ctypes.c_void_p(0),
     )
-    torch.cuda.synchronize()
     if err != 0:
         raise RuntimeError(f"hc_head_cuda_launch failed with HIP/CUDA error code {err}")
     return hidden

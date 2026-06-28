@@ -9,7 +9,9 @@ It includes:
 - The original CUDA/HIP baseline kernel.
 - The GEAK-compatible example directory.
 - The GEAK-optimized `mhc_pre` and `mhc_post` kernels.
-- A validated `hc_head` baseline that is ready for GEAK optimization.
+- A validated `hc_head` baseline. After removing Python wrapper synchronization
+  from the timing path, a kernel-only GEAK rerun did not find a verified
+  improvement over the corrected baseline.
 - Correctness and benchmark harnesses.
 - The final GEAK report and best patch.
 
@@ -583,6 +585,11 @@ bash scripts/test-head-baseline.sh --full-benchmark --iterations 5
 The head baseline harness compares the compiled CUDA/HIP kernel against an
 independent PyTorch reference and reports `GEAK_RESULT_LATENCY_MS`.
 
+Note: the head wrapper intentionally does not synchronize inside each kernel
+call. Synchronization is handled by the harness around warmup/timing loops, so
+the benchmark reflects kernel event timing instead of per-call Python wrapper
+synchronization overhead.
+
 ## Test Post Optimized
 
 Correctness:
@@ -658,6 +665,26 @@ Best patch:
 ```bash
 results/mhc_post_best_round2_patch_1.patch
 ```
+
+## GEAK Head Result
+
+The first GEAK run on `hc_head` found an apparent speedup by removing
+`torch.cuda.synchronize()` from the Python wrapper. That improved harness-level
+timing but did not change `src/mhc_head.cu`, so it should not be reported as a
+kernel optimization.
+
+After fixing the wrapper baseline, a kernel-only GEAK rerun modified
+`src/mhc_head.cu` but did not produce a verified improvement:
+
+```text
+corrected baseline: 0.032827 ms
+candidate:          0.033289 ms
+verified speedup:   0.9861x
+result:             no verified kernel improvement
+```
+
+The corrected status is: `hc_head` has a valid baseline and harness, but no
+accepted optimized kernel yet.
 
 ## Run GEAK Again
 
