@@ -61,22 +61,11 @@ __global__ void hc_head_baseline_kernel(
   const int head_base = token * hc_mult;
 
   float acc = 0.0f;
-  if (hc_mult == 4) {
-    const float w0 = head_mix[head_base + 0];
-    const float w1 = head_mix[head_base + 1];
-    const float w2 = head_mix[head_base + 2];
-    const float w3 = head_mix[head_base + 3];
-    acc = w0 * mhc_bf16_to_float(residual[residual_base + hidden_idx]);
-    acc = fmaf(w1, mhc_bf16_to_float(residual[residual_base + hidden_size + hidden_idx]), acc);
-    acc = fmaf(w2, mhc_bf16_to_float(residual[residual_base + hidden_size * 2 + hidden_idx]), acc);
-    acc = fmaf(w3, mhc_bf16_to_float(residual[residual_base + hidden_size * 3 + hidden_idx]), acc);
-  } else {
-    for (int channel = 0; channel < hc_mult; ++channel) {
-      const float weight = head_mix[head_base + channel];
-      const float value = mhc_bf16_to_float(
-          residual[residual_base + channel * hidden_size + hidden_idx]);
-      acc += weight * value;
-    }
+  for (int channel = 0; channel < hc_mult; ++channel) {
+    const float weight = head_mix[head_base + channel];
+    const float value = mhc_bf16_to_float(
+        residual[residual_base + channel * hidden_size + hidden_idx]);
+    acc += weight * value;
   }
 
   hidden[linear] = mhc_float_to_bf16(acc);

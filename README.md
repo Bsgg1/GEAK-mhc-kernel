@@ -9,9 +9,9 @@ It includes:
 - The original CUDA/HIP baseline kernel.
 - The GEAK-compatible example directory.
 - The GEAK-optimized `mhc_pre` and `mhc_post` kernels.
-- A validated `hc_head` baseline. After removing Python wrapper synchronization
-  from the timing path, a kernel-only GEAK rerun did not find a verified
-  improvement over the corrected baseline.
+- A validated `hc_head` implementation. After removing Python wrapper
+  synchronization from the timing path, a kernel-only GEAK rerun did not find a
+  verified improvement; a small manual kernel-source optimization is included.
 - Correctness and benchmark harnesses.
 - The final GEAK report and best patch.
 
@@ -29,7 +29,7 @@ examples/mhc_ops/
   test_mhc_ops_harness.py           # PyTorch reference harness
   src/mhc_pre.cu                    # CUDA/HIP mhc_pre baseline
   src/mhc_post.cu                   # CUDA/HIP mhc_post baseline
-  src/mhc_head.cu                   # CUDA/HIP hc_head baseline
+  src/mhc_head.cu                   # CUDA/HIP hc_head current optimized source
   mhc_pre_hip_wrapper.py            # hipcc build + ctypes wrapper
   mhc_post_hip_wrapper.py           # hipcc build + ctypes wrapper
   mhc_head_hip_wrapper.py           # hipcc build + ctypes wrapper
@@ -44,6 +44,11 @@ baseline/
   src/mhc_pre.cu                    # original baseline used before GEAK
   mhc_pre_hip_wrapper.py
   test_mhc_pre_hip_harness.py
+
+baseline_head/
+  src/mhc_head.cu                   # corrected hc_head baseline before manual kernel optimization
+  mhc_head_hip_wrapper.py
+  test_mhc_head_hip_harness.py
 
 optimized/
   src/mhc_pre.cu                    # GEAK best verified kernel
@@ -72,6 +77,40 @@ scripts/
 
 `baseline/` and `optimized/` are self-contained copies for comparison. The
 `examples/mhc_ops/` tree is the GEAK-style example directory.
+
+## Implemented Operators and Paths
+
+| Operator | Role | Reference | Baseline source | Optimized/current source | Wrapper | Harness |
+| --- | --- | --- | --- | --- | --- | --- |
+| `mhc_pre` | Multi-channel residual to single-channel layer input | `examples/mhc_ops/kernel.py` | `baseline/src/mhc_pre.cu` | `optimized/src/mhc_pre.cu` | `optimized/mhc_pre_hip_wrapper.py` | `baseline/test_mhc_pre_hip_harness.py` |
+| `mhc_post` | Sub-layer output plus residual to updated multi-channel residual | `examples/mhc_ops/kernel.py` | `examples/mhc_ops/src/mhc_post.cu` | `optimized_post/src/mhc_post.cu` | `optimized_post/mhc_post_hip_wrapper.py` | `examples/mhc_ops/test_mhc_post_hip_harness.py` |
+| `hc_head` | Final multi-channel residual fold to single-channel hidden state | `examples/mhc_ops/kernel.py` | `baseline_head/src/mhc_head.cu` | `examples/mhc_ops/src/mhc_head.cu` | `examples/mhc_ops/mhc_head_hip_wrapper.py` | `examples/mhc_ops/test_mhc_head_hip_harness.py` |
+
+All CUDA/HIP sources are compiled on Hygon DCU with:
+
+```bash
+hipcc -x hip --offload-arch=gfx928
+```
+
+## Baseline vs Optimized
+
+The numbers below are full-benchmark geometric means on Hygon K500SM_AI DCU
+(`gfx928`). Lower latency is better.
+
+| Operator | Baseline code | Optimized/current code | Baseline latency | Optimized latency | Speedup | Result source |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| `mhc_pre` | `baseline/src/mhc_pre.cu` | `optimized/src/mhc_pre.cu` | 0.892604 ms | 0.132551 ms | 6.7340x | `results/final_report.json` |
+| `mhc_post` | `examples/mhc_ops/src/mhc_post.cu` | `optimized_post/src/mhc_post.cu` | 0.101829 ms | 0.089756 ms | 1.1345x | `results/mhc_post_final_report.json` |
+| `hc_head` | `baseline_head/src/mhc_head.cu` | `examples/mhc_ops/src/mhc_head.cu` | 0.032827 ms | 0.031753 ms | 1.034x | standalone full benchmark after wrapper timing fix |
+
+Notes:
+
+- `mhc_pre` and `mhc_post` improvements were selected and verified by GEAK.
+- The first `hc_head` GEAK run mainly removed Python wrapper synchronization,
+  which was a harness-level timing fix, not a kernel-source optimization.
+- The current `hc_head` code includes a small manual kernel-source optimization:
+  the common `hc_mult == 4` path is unrolled and uses FMA, while other
+  `hc_mult` values still use the generic loop.
 
 ## Operator
 
@@ -666,7 +705,7 @@ Best patch:
 results/mhc_post_best_round2_patch_1.patch
 ```
 
-## GEAK Head Result
+## Head Result
 
 The first GEAK run on `hc_head` found an apparent speedup by removing
 `torch.cuda.synchronize()` from the Python wrapper. That improved harness-level
@@ -683,8 +722,20 @@ verified speedup:   0.9861x
 result:             no verified kernel improvement
 ```
 
-The corrected status is: `hc_head` has a valid baseline and harness, but no
-accepted optimized kernel yet.
+After that, `src/mhc_head.cu` was manually updated with a real kernel-source
+optimization for the common `hc_mult == 4` path. The loop over channels is
+unrolled and uses FMA while preserving the generic fallback for other
+`hc_mult` values.
+
+Final standalone full benchmark:
+
+```text
+corrected baseline: 0.032827 ms
+manual kernel:      0.031753 ms
+speedup:            1.034x
+```
+
+This is a small but real kernel-side improvement.
 
 ## Run GEAK Again
 
